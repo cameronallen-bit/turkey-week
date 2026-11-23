@@ -242,7 +242,7 @@ const list = record => Object.values(record || {});
 const includesGame = (kind,game) => kind === 'kidsTable' || kind === game;
 const clone = value => structuredClone(value);
 const packets = room => [...list(room.survey?.answers),...list(room.players).flatMap(p=>p.survey?.response?[p.survey.response]:[])];
-const countSurvey = (room,until=Infinity) => packets(room).filter(answer=>answer.at<until).length;
+const countSurvey = (room,until=Infinity) => packets(room).filter(answer=>answer.at>=room.meta.schedule.launch && answer.at<until).length;
 
 function surveyTimes(room) {
   const schedule=room.meta.schedule;
@@ -325,9 +325,10 @@ function voteResults(room,time,live=false) {
     for(const [i,id] of matches.entries()) {
       const pair=pairFor(r,i,winners);
       if(pair.some(dish=>!dishes[dish])) continue;
+      const start=r===0?room.meta.schedule.launch:roundEnd(room,r-1);
       const counts=pair.map(dish=>list(room.players).filter(player=>{
         const vote=player.sides?.votes?.[id];
-        return vote?.dish===dish && vote.at<roundEnd(room,r);
+        return vote?.dish===dish && vote.at>=start && vote.at<roundEnd(room,r);
       }).length);
       const preferred=dishes[pair[0]].seed<=dishes[pair[1]].seed?0:1;
       const win=counts[0]===counts[1]?preferred:Number(counts[1]>counts[0]);
@@ -472,7 +473,7 @@ let debugBase=Date.now(), debugOffset=debugEnabled?Number(params.get('offset') |
 let debugFixed=debugEnabled && !params.has('offset') && (demo?local.get('clock',defaultSchedule().launch+60000):null);
 let difference=0, sdkDb=null, pending=false, nameClash='', refreshTimer, toastTimer, bracketRegion=0, bingoTab='card', sideTab='', importPreview=null, exportText='', hostAppeals={}, forceRender=false;
 const clock = () => (Number.isFinite(debugFixed) && debugFixed?debugFixed+(Date.now()-debugBase):Date.now()+difference)+debugOffset;
-const stamp = () => demo || debugEnabled?clock():serverTime;
+const stamp = () => demo?clock():serverTime;
 const current = () => room?.players?.[pid];
 const draftKey = () => `draft:${code}:${pid}`;
 const queueKey = () => `marks:${code}:${pid}`;
@@ -743,7 +744,8 @@ function todayTasks(time,p=current()||{}) {
   if(phase==='board') {const s=surveyStats(room,p,time);tasks.push(['Play the Survey Says boards',s.total>0 && s.completed===s.total,'survey']);}
   if(round>=0) tasks.push([`Vote in ${round===0?'Round 1':`the ${ROUNDS[round]}`}`,MATCHES[round].every(id=>p.sides?.votes?.[id]),'sides']);
   if(bPhase==='mark') tasks.push(['Mark your Bingo card',list(p.bingo?.marks).some(mark=>mark.on && featherDay(room,mark.at)===featherDay(room,time)),'bingo']);
-  return tasks;
+  if(round>=2) tasks.sort((a,b)=>Number(a[2]==='survey')-Number(b[2]==='survey'));
+  return tasks.slice(0,2);
 }
 function hub(time) {
   const p=current(), ranks=rankings(room,'kidsTable',time,time>=currentReveal()), mine=ranks.find(row=>row.id===pid);
@@ -811,6 +813,7 @@ function sidesView(time) {
   }
   const showScore=time>=currentReveal()?time:Math.min(time,roundEnd(room,3)-1);
   return `<section class="surface">${gameHeading('sides',r>=0?ROUNDS[r]:'The bracket')}<div class="row between"><span class="tag">${bracketScore(p,voteResults(room,showScore).winners)} / 320 prediction pts</span>${BTN('Share my bracket','share','quiet')}</div>
+    ${time>=roundEnd(room,0)&&Object.keys(picks).length<15&&currentTab!=='picks'?'<p class="notice space">Predictions closed with Round 1. You can still vote in any open round.</p>':''}
     <div class="tabs">${[['picks','My picks'],['vote','Vote'],['results','Results']].map(([tab,label])=>BTN(label,'sides-tab',currentTab===tab?'on':'',`data-value="${tab}"`)).join('')}</div>${panel}</section>`;
 }
 function boardPosition(time) {
@@ -1179,7 +1182,7 @@ async function createRoom(values) {
 }
 async function exportAnswers() {
   const cutoff=Math.min(clock(),surveyTimes(room).surveyClose);
-  const records=shuffle(packets(room).filter(answer=>answer.at<cutoff));
+  const records=shuffle(packets(room).filter(answer=>answer.at>=room.meta.schedule.launch && answer.at<cutoff));
   const responses=await Promise.all(records.map(answer=>unseal(answer).catch(()=>null)));
   exportText=`Survey takers: ${responses.filter(Boolean).length}\n`+room.survey.prompts.map((prompt,i)=>`\n${i+1}. ${prompt}\n${responses.flatMap(response=>response?.[i]?[`- ${response[i].replace(/[\r\n]+/g,' ')}`]:[]).join('\n')}`).join('\n');
   await copy(exportText);
